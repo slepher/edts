@@ -293,9 +293,9 @@ get_module_info(M, Level) ->
 
 do_get_module_info(M, basic) ->
   Info                         = erlang:get_module_info(M),
-  {compile, Compile}           = lists:keyfind(compile, 1, Info),
   {exports, Exports}           = lists:keyfind(exports, 1, Info),
   %% Erlang 19 kills compile time
+  %% {compile, Compile}           = lists:keyfind(compile, 1, Info),
   %% {time, {Y, Mo, D, H, Mi, S}} = lists:keyfind(time,    1, Compile),
   {ok, ModSrc}                 = get_module_source(M, Info),
   [ {module, M}
@@ -502,12 +502,13 @@ reload_if_newer(SrcFile, OutDir) ->
   end.
 
 do_reload_if_newer(Module, Beam) ->
-  case module_modified_p(Module, Beam) of
-    true ->
-      try_load_mod(Module, Beam);
-    false ->
-      false
-  end.
+  try_load_mod(Module, Beam).
+  %% case module_modified_p(Module, Beam) of
+  %%   true ->
+  %%     try_load_mod(Module, Beam);
+  %%   false ->
+  %%     false
+  %% end.
 
 try_load_mod(Mod, File) ->
   LoadFileName = filename:rootname(File), %% Remove extension
@@ -520,7 +521,7 @@ try_load_mod(Mod, File) ->
 
 load_mod(Mod, File) ->
   code:purge(Mod),
-  case code:load_abs(File) of
+  case code:load_file(Mod) of
     {module, Mod} -> true;
     {error, Rsn}  -> error(Rsn)
   end.
@@ -531,13 +532,30 @@ module_modified_p(Mod, File) ->
   OldMD5 =/= NewMD5.
 
 get_compile_outdir(File) ->
+  %% One potential issue with this approach (and that of the original code) is that
+  %% if you have the same module open in 2 places it will overwrite the beam in your "project" location
+  %% as the module load will come from your project
+  %% Although maybe EDTS is clever enough to go to the right project / context...
   Mod  = list_to_atom(filename:basename(filename:rootname(File))),
-  Opts = try proplists:get_value(options, Mod:module_info(compile), [])
-         catch error:undef -> [] %% No beam-file
-         end,
-  get_compile_outdir(File, Opts).
+  _ = code:purge(Mod),
+  case code:load_file(Mod) of
+    {module, Mod} ->
+      case code:is_loaded(Mod) of
+        {file,BeamLocation} ->
+          filename:dirname(BeamLocation);
+        _ -> filename_to_outdir(File)
+      end;
+    _ -> filename_to_outdir(File)
+  end.
+
+  %%       _ -> []
+  %% Opts = try proplists:get_value(options, Mod:module_info(compile), [])
+  %%        catch error:undef -> [] %% No beam-file
+  %%        end,
+  %% get_compile_outdir(File, Opts).
 
 get_compile_outdir(File, Opts) ->
+  error_logger:info_msg("get_compile_outdir ~p / ~p", [File]),
   case proplists:get_value(outdir, Opts) of
     undefined -> filename_to_outdir(File);
     OutDir    ->
@@ -548,12 +566,13 @@ get_compile_outdir(File, Opts) ->
   end.
 
 filename_to_outdir(File) ->
-  DirName = filename:dirname(File),
-  EbinDir = filename:join([DirName, "..", "ebin"]),
-  case filelib:is_dir(EbinDir) of
-    true  -> EbinDir;
-    false -> DirName
-  end.
+  find_rebar3_beam_dir(File).
+  %% DirName = filename:dirname(File),
+  %% EbinDir = filename:join([DirName, "..", "ebin"]),
+  %% case filelib:is_dir(EbinDir) of
+  %%   true  -> EbinDir;
+  %%   false -> DirName
+  %% end.
 
 
 %%------------------------------------------------------------------------------
@@ -776,6 +795,91 @@ extract_compile_opt_p({d,               _, _}) -> true;
 extract_compile_opt_p(export_all)              -> true;
 extract_compile_opt_p({no_auto_import,  _})    -> true;
 extract_compile_opt_p(_)                       -> false.
+
+
+
+%%%-----------------------------------------------------------------------------
+%%% Code to try to mimic the logic in rebar3 as to where beam files are saved
+%%%-----------------------------------------------------------------------------
+find_rebar3_beam_dir(ErlFilePath) ->
+  Clean = cleanpath(ErlFilePath),
+  Module = erl_filename_to_module_name(Clean),
+  SrcDir = filename:dirname(Clean),
+  Parts = string:split(SrcDir, "/", all),
+  Location = find_rebar3_beam_dir_(lists:reverse(Parts), undefined),
+  error_logger:error_msg("Guessed at ~p for ~p", [Location, ErlFilePath]),
+  Location.
+
+find_rebar3_beam_dir_(Parts = [AppName, "lib", "default", "_build" | Root], _MaybeAppName) ->
+  parts_to_path(["ebin" | Parts]);
+
+
+find_rebar3_beam_dir_(Parts = ["src" | T], MaybeAppName) ->
+  error_logger:error_msg("In src dir ~p ", [Parts]),
+  BasePath = parts_to_path(T),
+
+  %% Is there an ebin directory that is a peer of src?
+  PotentialPath = parts_to_path(["ebin" | T]),
+  case filelib:is_dir(PotentialPath) of
+    true -> PotentialPath;
+    false ->
+      %% Is there an app.src file?
+      case filelib:wildcard(BasePath ++ "/src/*.app.src") of
+        [AppFile] ->
+          %% We have found the name of our OTP application
+          find_rebar3_beam_dir_(T, appsrc_filename_to_app_name(AppFile));
+        _ ->
+          find_rebar3_beam_dir_(T, MaybeAppName)
+      end
+  end;
+
+
+find_rebar3_beam_dir_(Parts = [_ | T], undefined) ->
+  find_rebar3_beam_dir_(T, undefined);
+
+find_rebar3_beam_dir_(Parts = [_ | T], AppName) ->
+  PotentialPath = parts_to_path(["ebin", AppName, "lib", "default", "_build" | Parts]),
+  case filelib:is_dir(PotentialPath) of
+    true -> PotentialPath;
+    false -> find_rebar3_beam_dir_(T, AppName)
+  end;
+
+find_rebar3_beam_dir_([], _MaybeAppName) ->
+  io:format("_MaybeAppName ~p~n", [_MaybeAppName]),
+  "/tmp".
+
+
+
+appsrc_filename_to_app_name(Filename) ->
+  StillWithDotApp = erl_filename_to_module_name(Filename),
+  filename:rootname(StillWithDotApp).
+
+
+erl_filename_to_module_name(Filename) ->
+  filename:rootname(filename:basename(Filename)).
+
+parts_to_path(Parts) ->
+  lists:flatten(lists:join("/", lists:reverse(Parts))).
+
+cleanpath(Path) ->
+  cleanpath(filename:split(Path), []).
+
+cleanpath([], Acc) ->
+  filename:join(lists:reverse(Acc));
+
+cleanpath([Dot | T], Acc) when Dot == "."; Dot == <<".">> ->
+  cleanpath(T, Acc);
+
+cleanpath([DotDot | T], Acc=[_]) when DotDot == ".."; DotDot == <<"..">> ->
+  cleanpath(T, Acc);
+
+cleanpath([DotDot | T], [_|Acc]) when DotDot == ".."; DotDot == <<"..">> ->
+  cleanpath(T, Acc);
+
+cleanpath([Segment | T], Acc) ->
+  cleanpath(T, [Segment | Acc]).
+
+
 
 %%%_* Unit tests ===============================================================
 

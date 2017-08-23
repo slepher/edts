@@ -805,7 +805,7 @@ find_rebar3_beam_dir(ErlFilePath) ->
   Clean = cleanpath(ErlFilePath),
   Module = erl_filename_to_module_name(Clean),
   SrcDir = filename:dirname(Clean),
-  Parts = string:split(SrcDir, "/", all),
+  Parts = filename:split(SrcDir),
   Location = find_rebar3_beam_dir_(lists:reverse(Parts), undefined),
   error_logger:error_msg("Guessed at ~p for ~p", [Location, ErlFilePath]),
   Location.

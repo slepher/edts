@@ -358,11 +358,13 @@ init(AppEnvs) ->
 
 
 update_paths() ->
-  {ok, ProjectRoot} = application:get_env(edts, project_root_dir),
-  {ok, LibDirs} = application:get_env(edts, project_lib_dirs),
-  Paths = edts_util:expand_code_paths(ProjectRoot, LibDirs),
+  Paths = project_paths(),
   lists:foreach(fun code:add_path/1, Paths).
 
+project_paths() ->
+  {ok, ProjectRoot} = application:get_env(edts, project_root_dir),
+  {ok, LibDirs} = application:get_env(edts, project_lib_dirs),
+  edts_util:expand_code_paths(ProjectRoot, LibDirs).
 
 %%------------------------------------------------------------------------------
 %% @doc
@@ -579,14 +581,56 @@ get_compile_outdir(File, Opts) ->
   end.
 
 filename_to_outdir(File) ->
-  DirName = filename:dirname(File),
-  EbinDir = filename:join([DirName, "..", "ebin"]),
-  case filelib:is_dir(EbinDir) of
-    true  -> EbinDir;
-    false -> DirName
+  case rebar3_outdir(File) of
+    {ok, OutDir} ->
+      OutDir;
+    error ->
+      DirName = filename:dirname(File),
+      EbinDir = filename:join([DirName, "..", "ebin"]),
+      case filelib:is_dir(EbinDir) of
+        true  -> EbinDir;
+        false -> DirName
+      end
   end.
 
+rebar3_outdir(File) ->
+  Paths = project_paths(),
+  GroupedPaths = grouped_paths(Paths),
+  ReversedPath = lists:reverse(filename:split(File)),
+  case ReversedPath of
+    [_BaseName, "src", AppName|_] ->
+      case maps:find({AppName, ebin}, GroupedPaths) of
+        {ok, Path} ->
+          {ok, Path};
+        error ->
+          error
+      end;
+    [_BaseName, "test", AppName|_] ->
+      case maps:find({AppName, test}, GroupedPaths) of
+        {ok, Path} ->
+          {ok, Path};
+        error ->
+          error
+      end;
+    _Other ->
+      error
+  end.
 
+grouped_paths(Paths) ->
+  {ok, RootDir} = application:get_env(edts, project_root_dir),
+  SplitedRoot = lists:reverse(filename:split(RootDir)),
+  lists:foldl(
+    fun(Path, Acc) ->
+        case lists:reverse(filename:split(Path)) of
+          [_|SplitedRoot] ->
+            Acc;
+          ["ebin", AppName|_] ->
+            maps:put({AppName, ebin}, Path, Acc);
+          ["test", AppName|_] ->
+            maps:put({AppName, test}, Path, Acc)
+        end
+    end, maps:new(), Paths).
+    
 %%------------------------------------------------------------------------------
 %% @equiv get_module_source(M, M:module_info()).
 -spec get_module_source(M::module()) -> {ok, string()} | {error, not_found}.

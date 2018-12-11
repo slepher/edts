@@ -626,8 +626,10 @@ grouped_paths(Paths) ->
             Acc;
           ["ebin", AppName|_] ->
             maps:put({AppName, ebin}, Path, Acc);
-          ["test", AppName|_] ->
-            maps:put({AppName, test}, Path, Acc)
+          ["test", AppName, "lib", "test"|_T] ->
+            maps:put({AppName, test}, Path, Acc);
+          ["test", _AppName|_T] ->
+            Acc
         end
     end, maps:new(), Paths).
     
@@ -844,12 +846,14 @@ extract_compile_opts(File) ->
       [Opt || Opt <- Opts, extract_compile_opt_p(Opt)]
   end.
 
+extract_compile_opt_p({parse_transform, cth_readable_transform}) -> false;
 extract_compile_opt_p({parse_transform, _})    -> true;
 extract_compile_opt_p({i,               _})    -> true;
 extract_compile_opt_p({d,               _})    -> true;
 extract_compile_opt_p({d,               _, _}) -> true;
 extract_compile_opt_p(export_all)              -> true;
 extract_compile_opt_p({no_auto_import,  _})    -> true;
+extract_compile_opt_p(nowarn_export_all)       -> true;
 extract_compile_opt_p(_)                       -> false.
 
 %%%_* Unit tests ===============================================================

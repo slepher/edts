@@ -67,7 +67,7 @@ expand_code_paths(ProjectRoot, LibDirs) ->
                filename:join(ProjectRoot, "test")],
   F = fun(Dir) -> expand_code_path(ProjectRoot, Dir) end,
   LibPaths = lists:flatmap(F, LibDirs),
-  RootPaths ++ LibPaths.
+  LibPaths ++ RootPaths.
 
 expand_code_path(Root, Dir) ->
   Fun = fun(F) -> [filename:join(F, "ebin"), filename:join(F, "test")] end,

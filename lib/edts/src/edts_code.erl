@@ -581,41 +581,53 @@ get_compile_outdir(File, Opts) ->
   end.
 
 filename_to_outdir(File) ->
-  case rebar3_outdir(File) of
-    {ok, OutDir} ->
-      OutDir;
-    error ->
-      DirName = filename:dirname(File),
-      EbinDir = filename:join([DirName, "..", "ebin"]),
-      case filelib:is_dir(EbinDir) of
-        true  -> EbinDir;
-        false -> DirName
-      end
+    case rebar3_outdir(File) of
+        {ok, OutDir} ->
+            OutDir;
+        error ->
+            filename_to_outdir_0(File)
+    end.
+
+filename_to_outdir_0(File) ->
+  DirName = filename:dirname(File),
+  EbinDir = filename:join([DirName, "..", "ebin"]),
+  case filelib:is_dir(EbinDir) of
+    true  -> EbinDir;
+    false -> DirName
   end.
 
 rebar3_outdir(File) ->
   Paths = project_paths(),
   GroupedPaths = grouped_paths(Paths),
   ReversedPath = lists:reverse(filename:split(File)),
-  case ReversedPath of
-    [_BaseName, "src", AppName|_] ->
+  case check_reversed_path(ReversedPath) of
+    {ok, {app, AppName}} ->
       case maps:find({AppName, ebin}, GroupedPaths) of
         {ok, Path} ->
           {ok, Path};
         error ->
           error
-      end;
-    [_BaseName, "test", AppName|_] ->
+          end;
+    {ok, {test, AppName}} ->
       case maps:find({AppName, test}, GroupedPaths) of
         {ok, Path} ->
           {ok, Path};
         error ->
           error
       end;
-    _Other ->
+    error ->
       error
   end.
 
+check_reversed_path([_BaseName, "src", AppName|_T]) ->
+  {ok, {app, AppName}};
+check_reversed_path([_BaseName, "test", AppName|_T]) ->
+  {ok, {test, AppName}};
+check_reversed_path([_BaseName|T]) ->
+  check_reversed_path(T);
+check_reversed_path([]) ->
+  error.
+  
 grouped_paths(Paths) ->
   {ok, RootDir} = application:get_env(edts, project_root_dir),
   SplitedRoot = lists:reverse(filename:split(RootDir)),

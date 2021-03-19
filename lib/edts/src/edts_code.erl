@@ -330,7 +330,7 @@ do_get_module_info(M, detailed) ->
       {error, {not_found, M}}
   end.
 
-get_compile_cwd(M, [{attribute,1,file,{RelPath,1}}|_]) ->
+get_compile_cwd(M, [{attribute,_Pos,file,{RelPath,1}}|_]) ->
   CompileInfo = M:module_info(compile),
   CompileOpts = proplists:get_value(options, CompileInfo),
   case proplists:get_value(cwd, CompileOpts, undefined) of
@@ -705,7 +705,8 @@ get_module_source_from_beam(M) ->
 %%------------------------------------------------------------------------------
 format_errors(Type, Errors) ->
   LineErrorF =
-    fun(File, {Line, Source, ErrorStr}) ->
+    fun(File, {Pos, Source, ErrorStr}) ->
+        Line = get_line(Pos),
         {Type, File, Line, lists:flatten(Source:format_error(ErrorStr))}
     end,
   FileErrorF =
@@ -714,6 +715,10 @@ format_errors(Type, Errors) ->
     end,
   lists:flatmap(FileErrorF, Errors).
 
+get_line({Line, _Column}) ->
+  Line;
+get_line(Line) when is_integer(Line) ->
+  Line.
 
 %%------------------------------------------------------------------------------
 %% @doc Get the file and line of a function from abstract code.
